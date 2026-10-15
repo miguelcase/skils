@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "n8n-ops": {
+      "type": "http",
+      "url": "https://n8n.ops.somoscase.com/mcp-server/http",
+      "headers": {
+        "Authorization": "Bearer COLE_AQUI_O_TOKEN_DO_N8N_OPS"
+      }
+    },
+    "n8n": {
+      "type": "http",
+      "url": "https://pires072931.app.n8n.cloud/mcp-server/http"
+    },
+    "tactiq": {
+      "type": "http",
+      "url": "https://mcp.tactiq.io"
+    },
+    "codegraph": {
+      "type": "stdio",
+      "command": "codegraph",
+      "args": ["serve", "--mcp"]
+    }
+  }
+}

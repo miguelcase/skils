@@ -1,0 +1,274 @@
+---
+name: case-engenharia
+description: Use SEMPRE que for escrever, revisar, medir ou implantar código da Case Marketing de Performance — Central do Cliente (API Fastify, Postgres, front Next.js), fluxos n8n, ou qualquer coisa que toque a VPS ops-case-01. Acione quando o pedido mencionar Central, Acelerador, migration, índice, EXPLAIN, worktree, Codex, deploy, rebuild, PR, CI, n8n, webhook, ingest, coletor, ou nomes de cliente da carteira. Também acione antes de rodar superpowers (brainstorming, writing-plans, subagent-driven-development, TDD) nesses projetos: esta skill traz as travas operacionais reais que fazem o processo genérico funcionar aqui. Ela NÃO descreve o estado da infra (isso é a case-infra) — ela descreve como trabalhar dentro dela sem quebrar produção.
+---
+
+# Engenharia na Case
+
+A Case Marketing de Performance é uma agência de performance. O software existe para servir a operação
+de mídia e CRM dos clientes, não o contrário. Duas frentes:
+
+**A Central do Cliente** (o "Acelerador") é o produto interno: portal onde o time e o cliente veem
+métricas de mídia, saúde de conta, alertas, tarefas e análise de IA. API Fastify + Postgres 17,
+front Next.js com **static export** hospedado no Firebase.
+
+**Os fluxos n8n** são o sistema nervoso: monitor de saldo Meta Ads, ingest de métricas, robô de ata,
+alertas de performance, conversões offline CRM para plataformas de anúncio, import do Asana.
+
+**Os serviços que a Case opera** e que aparecem no código: Meta Ads, Google Ads, TikTok e LinkedIn Ads;
+RD Station, HubSpot, Kommo e Pipedrive no CRM; Loja Integrada, Wbuy, Shopify e Nuvemshop no e-commerce.
+
+---
+
+## As travas que não são negociáveis
+
+Cada uma abaixo custou caro para descobrir. Violar qualquer uma quebra produção ou queima horas.
+
+### 1. Nada te impede de mergear, inclusive sem CI
+
+**A `main` do `central-do-cliente` NÃO tem branch protection.** Medido em 26/08/2026:
+`repos/.../branches/main` devolve `protected: false`, e `/protection` e `/rulesets` devolvem
+**403 "Upgrade to GitHub Pro or make this repository public"** — o plano da organização nem permite
+configurar. **Não existe status check obrigatório.**
+
+Até 26/08 esta trava afirmava o contrário: "push direto é recusado, o merge volta para uma pessoa".
+Era falso. É a **segunda vez** que esta mesma trava erra por afirmar sem medir. O custo desta vez:
+o PR #172 foi mergeado às 16:49:23Z, **três minutos antes de a execução do CI sequer existir**, e
+nada barrou. Deu certo por sorte, não por processo.
+
+Se o merge deve passar por outra pessoa, isso é combinação da casa e vale por disciplina: não há
+nada técnico sustentando.
+
+**O `gh pr checks --watch` NÃO espera o check aparecer.** Ele observa o que já existe; com zero
+checks responde `no checks reported on the '<branch>' branch` e **sai na hora**, com cara de
+veredito. No mesmo dia, o GitHub levou segundos para criar a execução de um PR e **9 minutos** para
+a de outro. **Ausência de check não é check verde** — mesma família do 200 para recurso inexistente
+(referência n8n) e do esperado desatualizado em runbook.
+
+O jeito certo é esperar o check **existir** e depois ler a conclusão, não a ausência de má notícia:
+
+```bash
+for i in $(seq 1 40); do
+  n=$(gh pr view <N> --repo <REPO> --json statusCheckRollup --jq '.statusCheckRollup | length')
+  [ "$n" -gt 0 ] && break
+  sleep 15
+done
+gh pr checks <N> --repo <REPO> --watch
+gh pr view <N> --repo <REPO> --json statusCheckRollup --jq '.statusCheckRollup[].conclusion'
+```
+
+O `gh` **está autenticado** (conta `miguelcase`, escopo `repo`) — confirmado em 12/08/2026 com
+`gh auth status`. Até então esta skill afirmava o contrário, e a afirmação errada custou duas idas e
+voltas pedindo ao dono do produto que abrisse um PR que eu podia ter aberto. **Verifique com
+`gh auth status` antes de declarar que não dá**, exatamente como a trava 9 manda: fato rotulado como
+já conhecido não recebe ceticismo de ninguém.
+
+Ao criar PR, passe **`--repo Case-Marketing-de-Performance/central-do-cliente` explícito**. Sem isso
+o `gh` pode resolver pelo `origin`, que é outro repositório (trava 2).
+
+Corolário: **confira o estado remoto com `git ls-remote`, nunca com `git log` de ref local.** Um push
+relatado como feito pode ter sido recusado sem que o `fetch` deixe óbvio.
+
+### 2. O `origin` é outro repositório
+
+São **três** remotes, e só um serve:
+
+| Remote | Aponta para | Usar? |
+|---|---|---|
+| `central-do-cliente` | `Case-Marketing-de-Performance/central-do-cliente` | **Sim.** É o oficial, produção sai dele |
+| `origin` | `Case-Marketing-de-Performance-` (hífen no fim) | **Não.** Outro repositório, desatualizado |
+| `sites` | `git.chatgpt-team.site/...` | **Não.** Ambiente do Codex |
+
+Sempre `git push central-do-cliente <branch>`. Nunca o push padrão.
+
+### 3. Esta máquina não roda o que você acha que roda
+
+Não há `node`, `npm`, `pnpm`, `docker` nem `psql` no PATH. Existe um Node embutido:
+
+```
+/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
+```
+
+A causa da barreira importa, e não é arquitetura errada. O `.node` é `darwin-arm64`, o certo. O que
+barra é **assinatura de código** — o Node do ChatGPT.app roda *hardened* e recusa carregar dylib de
+outro Team ID (`ERR_DLOPEN_FAILED`, "different Team IDs").
+
+**Mas o dlopen falhar não decide o resultado. Quem decide é o pacote ter plano B:**
+
+| O quê | Roda? | Por quê |
+|---|---|---|
+| `tsc` | **Sim** | JavaScript puro, não tem addon |
+| `next build` e `next dev` | **Sim** | O binário do SWC falha o dlopen e o Next **cai para WASM sozinho**, com um `⚠` no log, e conclui |
+| **Navegador** | **Sim** | O Browser pane abre o `next dev`. Dá para clicar, baixar arquivo e conferir na tela |
+| `vitest` | **Não** | O rollup **não** tem fallback WASM. O *runner* acaba aqui |
+| **Os testes em si** | **Sim, com rodeio** | Ver abaixo: quem não roda é o runner, não o código |
+
+**O `vitest` não rodar não significa que você não pode ver o teste passar.** Quem trava é o rollup,
+que é dependência do *runner*. O caminho, provado no Lote 1:
+
+1. compile de verdade (`tsc` **com** emissão, não `--noEmit`);
+2. troque **só** o `db/client.js` compilado por um stub com fila de respostas, equivalente ao
+   `mockResolvedValueOnce`;
+3. rode os casos com o Node embutido puro. Sem addon nativo, sem bloqueio.
+
+**E o passo que vale mais que o verde:** reintroduza o bug de propósito numa cópia do módulo
+compilado e rode o mesmo caso contra ela. Se o teste continuar passando, ele não testa nada. Foi
+assim que se provou que o teste de visibilidade **discrimina a regressão** em vez de passar por
+acidente — a resposta concreta para a armadilha que mais se repetiu nesta base: **teste que não pode
+falhar é indistinguível de teste que passa.**
+
+Isso não substitui o CI, que continua sendo o portão. É execução real observada em vez de presumida.
+
+**Verifique antes de declarar impossível.** A versão anterior desta trava dizia que "qualquer pacote
+com addon nativo falha igual" e que teste e build só rodavam no CI. Isso é falso para o Next, e o erro
+custou caro: três agentes seguidos pularam verificação visual que era perfeitamente possível, e um
+defeito real (PNG exportado sem as linhas do gráfico) só apareceu quando um deles desobedeceu e foi
+rodar o app. **Impossibilidade herdada de instrução, sem probe, é a forma mais barata de não achar bug.**
+
+Prova rápida de que o build passou de verdade: `apps/web/.next/BUILD_ID` com data de hoje.
+
+### 4. Worktree novo nasce sem dependências
+
+`git worktree add` não copia arquivo ignorado, então não vem `node_modules` e o `tsc` não roda. Faça
+symlink do tree original **depois de conferir que o `pnpm-lock.yaml` é idêntico**. E exclua os symlinks
+pelo `info/exclude` do **git-common-dir** (`git rev-parse --git-common-dir`), porque o `.gitignore` usa
+`node_modules/` com barra, que não casa com symlink — e um `git add -A` distraído commita três symlinks
+apontando para fora do repositório.
+
+### 5. Migration: sem `CONCURRENTLY`, um prefixo por arquivo
+
+`apps/api/src/db/migrate.ts` envolve **cada arquivo em `begin`/`commit`**. Logo:
+
+- `CREATE INDEX CONCURRENTLY` e `DROP INDEX CONCURRENTLY` **falham**. Não use.
+- Toda migration é atômica: falha em qualquer statement reverte o arquivo inteiro.
+- O runner aplica por `readdirSync().sort()`, então **dois arquivos `049_*` rodariam os dois**, sem
+  erro e sem ninguém perceber. E a ordem é **de byte do nome** (`.sort()` padrão do JS: maiúscula
+  antes de minúscula, `-` antes de letra), não alfabética. **Um prefixo numérico = um arquivo.**
+- Reivindique o número **na abertura do PR**, não quando escrever o arquivo.
+
+Ponha `set local lock_timeout` **e** `set local statement_timeout` no topo. E saiba a diferença:
+**`lock_timeout` limita quanto você espera por um lock, não quanto a produção espera atrás de um lock
+que você já detém.** Agrupe os `DROP` por tabela para encurtar a retenção.
+
+### 6. Produção tem três níveis de permissão, e eles não se misturam
+
+| Nível | O que é | Precisa de |
+|---|---|---|
+| Leitura | `set default_transaction_read_only = on;` sempre | Autorização geral |
+| Escrita para medir | `begin; ... rollback;` **nunca `commit`** | Autorização explícita, por trabalho |
+| Escrita que fica | `ANALYZE`, `CREATE EXTENSION`, migration | Autorização explícita **e** ciência de que não tem rollback |
+
+Quem tem escrita na VPS é o **Codex**, não você. Rebuild de imagem e `npm run migrate` são dele.
+
+**Janelas proibidas:** cron de anomalias às **10h**, cron de relatórios **segunda 7h**. Não aplique
+migration em cima delas.
+
+### 7. Nunca canalize saída de `ssh` para comando que fecha o pipe
+
+`ssh ... | head -20` gera `SIGPIPE` e **mata a sessão no meio da transação**. Já aconteceu, com um
+`DROP INDEX` aplicado e antes do `rollback`. O servidor aborta ao perder a conexão, mas o backend
+órfão segura `ACCESS EXCLUSIVE` até perceber o socket morto. Grave em arquivo e leia depois.
+
+### 8. PII: o código já protege, não estrague
+
+`apps/api/src/db/client.ts` **nunca loga os `values`** da query, de propósito. Mantenha isso.
+
+- `pg_stat_activity.query` mostra `$1`, **sem os valores** (protocolo estendido). É seguro.
+- `log_min_duration_statement` **registra os parâmetros**. Só com autorização e janela curta.
+- Documento versionado não recebe UUID, e-mail, telefone, CPF, token, ID de Pixel nem URL com
+  querystring. Nome de empresa cliente pode; nome de pessoa física, não.
+- Se um documento afirmar que foi anonimizado, **cumpra a afirmação**. Promessa de conformidade não
+  cumprida é pior que ausência dela, porque desliga a checagem de quem vem depois.
+
+### 9. Medir antes de afirmar, e desconfiar de número herdado
+
+Regras que se pagaram:
+
+- **`idx_scan` alto não diz qual query usa o índice.** Redundância se decide pelo **catálogo**
+  (`indkey`, `indclass`, `indoption`, `indpred`), que é propriedade estrutural e vale até para
+  consumidor desconhecido.
+- **`stats_reset` é NULL neste banco**: os contadores acumulam desde a criação, mas **estão vivos**.
+- **`EXPLAIN ANALYZE` executa a query.** Só rode em `SELECT`.
+- Rode cada `EXPLAIN` duas vezes e use a segunda: a base vive em cache e a primeira distorce `Buffers`.
+- **Cuidado com o JIT.** Custo estimado acima de 100.000 dispara compilação que pode ser 90% do tempo
+  medido. Isole com `SET jit = off` antes de atribuir ganho a um índice.
+- **Fato rotulado como "já conhecido" não recebe ceticismo de ninguém.** Veredito pré-aprovado tem que
+  vir com o número que o sustenta, não com o rótulo.
+
+### 10. Copy de produto da Case não usa travessão
+
+Vale para qualquer texto que apareça na tela. Comentário de SQL e documento interno não são copy.
+
+### 11. Ausência formatada como valor é a família de bug desta base
+
+O Lote 6A achou **cinco** ocorrências da mesma coisa em uma tarde, e nenhuma dava erro. Todas mentiam
+com confiança para quem estava decidindo verba de mídia olhando o número:
+
+| Onde | O que a tela mostrava |
+|---|---|
+| `saldo`/`restante` não carregados no payload | Card "Saldo somado" em **R$ 0,00** |
+| CPL sem base no mês | **"R$ 0,00"**, que lê como lead de graça |
+| ROAS sem base | Literalmente **"undefinedx"** |
+| CPL calculado em janelas diferentes | **R$ 100,00** numa tela, **R$ 33,33** na outra |
+| `investidoMes`/`resultadosMes` legitimamente zero | Cai no fallback do histórico inteiro |
+
+Três padrões produzem isso, e os três **parecem defensivos**:
+
+- **`?? 0`** sobre valor que vira número na tela. Transforma "não sei" em "zero" sem avisar.
+- **`?.`** dentro de template literal. Não guarda nada: empurra o `undefined` para dentro da string.
+- **`||`** como fallback. Engole o **zero legítimo** junto com a ausência, porque `0` é *falsy*.
+
+**A regra:** em código da Central, todo `?? 0`, `?.` e `||` sobre valor que vira número na tela é
+suspeito até prova em contrário. A guarda certa é **`== null`**, que distingue ausência de zero. E o
+render de ausência é texto ("sem registro", "Sem base", "Pendente"), nunca um número.
+
+**E o corolário que importa mais:** duas dessas cinco **já estavam erradas antes** do lote que as
+encontrou. O que mudou foi a alcançabilidade — código errado que ninguém via porque não tinha com o
+que ser comparado. **Ao mudar a janela ou a fonte de um número, procure o outro lugar que mostra o
+mesmo número.** É lá que o erro antigo vira discordância visível.
+
+**A fixture bem-comportada é cúmplice deste bug.** No Lote 6B isso apareceu **três vezes seguidas**:
+`mock-data.demo.ts` tinha saldo sempre presente e `limite: 500/600/700`, então a tela **nunca
+exercitava o caminho da ausência** — que é exatamente onde a Central mente. Um conserto chegou a
+passar por implementador, inspeção visual e revisor mostrando `Piso de alerta: R$ 0,00`, número
+fabricado, porque nenhuma fixture tinha piso ausente.
+
+**A regra:** ao consertar ausência-como-valor, **acrescente a fixture da ausência no mesmo commit.**
+Sem ela, você não consertou nada verificável: só trocou um caminho que ninguém percorre por outro.
+E ao herdar um caso de borda vindo do banco, vá ler o SQL que o produz — a conta nunca coletada nasce
+com `null::numeric as saldo` e `0::numeric as limite_alerta` **na mesma linha do `select`**, e é isso
+que diz qual combinação a fixture precisa ter.
+
+---
+
+## Como o superpowers roda aqui
+
+O processo genérico funciona, com estes ajustes:
+
+| Skill | Ajuste na Case |
+|---|---|
+| `using-git-worktrees` | Worktree **fora** de `~/Documents/Codex/`, que é compartilhado com o Codex e muda sem aviso. Lembre do `node_modules` (trava 4) |
+| `writing-plans` | **Um plano por lote**, não um plano gigante. Lotes definidos por posse de arquivo-hub, e a ordem entre eles costuma ser um DAG, não uma fila |
+| `subagent-driven-development` | Nunca dois implementadores em paralelo: commitam na mesma branch e disputam o índice do git. Passe a **procedência da autorização** no prompt, senão o alerta de segurança dispara em falso |
+| `verification-before-completion` | O portão tem três degraus: `tsc` local, CI no PR, e **prova de aplicação em produção** para quem mexe em migration. "Mergeado" não é "aplicado" |
+| `test-driven-development` | Vermelho-verde local não existe para `vitest`. O vermelho aparece no CI. Planeje o ciclo com isso |
+| `requesting-code-review` | Peça ao revisor para **atacar a afirmação central**, não para varrer o diff. Foi assim que apareceram o JIT, o contador vivo e a premissa falsa do bloco C4 |
+
+**Definição de pronto, por tipo:**
+
+- Só código: CI verde no PR **e** merge. Como não há check obrigatório (trava 1), o verde é
+  **você** que confere antes de mergear, lendo a conclusão de cada check.
+- Toca `apps/api`: acima **mais** rebuild do Codex confirmado, com a saída colada.
+- Migration: acima **mais** prova em produção (`schema_migrations` e o objeto criado ou removido).
+- Fora do repo (skill, relatório): artefato entregue e revisado pelo dono do produto.
+
+---
+
+## Referências
+
+- `references/central.md` — anatomia da Central: rotas quentes, arquivos-hub, o que já foi medido
+- `references/producao.md` — receitas prontas de leitura e medição segura no Postgres de produção
+- `references/n8n.md` — as armadilhas dos fluxos, todas descobertas quebrando algo
+
+Para o **estado** da infra (versões, containers, backups, env vars), use a skill `case-infra`. Esta
+aqui é sobre **como trabalhar**, não sobre o que está no ar.
