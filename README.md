@@ -1,8 +1,8 @@
-# Skills e plugins para Claude Code
+# Skills para Claude Code e Codex
 
 Coleção pessoal de **24 skills**, cópias de referência de **2 plugins** e configuração de **4 servidores MCP**, baseada no pacote de 08/10/2026.
 
-As skills reúnem instruções, exemplos e, em alguns casos, scripts que o Claude Code usa em tarefas de segurança, automação de navegador, produção de vídeos e engenharia. O instalador copia as skills para a configuração do usuário; as ferramentas e dependências de cada skill são instaladas separadamente.
+As skills reúnem instruções, exemplos e, em alguns casos, scripts que o Claude Code usa em tarefas de segurança, automação de navegador, produção de vídeos e engenharia. O instalador permite escolher Claude Code, Codex ou ambos e copia as skills para a configuração do usuário; as ferramentas e dependências de cada skill são instaladas separadamente.
 
 ## Estrutura
 
@@ -10,7 +10,9 @@ As skills reúnem instruções, exemplos e, em alguns casos, scripts que o Claud
 .
 ├── README.md                 # Guia de instalação e uso
 ├── LEIA-ME.md                # Notas originais do pacote
-├── instalar.sh               # Instalador de skills, plugins e MCPs
+├── instalar.sh               # Escolha do destino e instalação
+├── scripts/                  # Adaptação das cópias para Codex
+├── tests/                    # Verificações isoladas do instalador
 ├── skills-claude-code/       # 24 skills, cada uma com SKILL.md
 ├── plugins/claude-code/      # Cópias dos plugins superpowers e codex
 └── mcps/mcp-servers.json     # Referência das configurações MCP
@@ -21,19 +23,48 @@ As skills reúnem instruções, exemplos e, em alguns casos, scripts que o Claud
 Pré-requisitos:
 
 - Git e Bash, em macOS, Linux ou Windows com WSL.
-- Claude Code instalado e autenticado, com o comando `claude` disponível no terminal. Consulte a [instalação oficial](https://code.claude.com/docs/en/setup).
+- Para usar no Claude: Claude Code instalado e autenticado, com o comando `claude` disponível no terminal. Consulte a [instalação oficial](https://code.claude.com/docs/en/setup).
+- Para instalar para Codex: Python 3. Para usar as skills depois, Codex instalado e autenticado (aplicativo, CLI ou extensão com suporte a skills locais). A instalação das skills não exige o executável `codex`.
 - Acesso à internet para baixar plugins e dependências.
 - Node.js 20+ e npm para a `playwright-skill`; outras skills podem exigir Python e ferramentas específicas descritas em seus respectivos `SKILL.md`.
 
-Clone o repositório e execute:
+Clone o repositório e escolha o destino:
 
 ```bash
 git clone https://github.com/miguelcase/skils.git
 cd skils
-./instalar.sh
+
+# Somente skills do Codex:
+./instalar.sh --destino codex
+
+# Claude Code (comportamento original: skills, plugins e MCPs):
+./instalar.sh --destino claude
+
+# Skills nos dois agentes, sem plugins ou MCPs:
+./instalar.sh --destino ambos --sem-plugins --sem-mcp
 ```
 
-O instalador:
+Execute a opção correspondente ao seu objetivo. Sem `--destino`, o padrão continua sendo `claude`. Para instalar nos dois e também configurar plugins/MCPs do Claude, use `./instalar.sh --destino ambos`.
+
+### Destinos e compatibilidade
+
+| Destino | Pasta de skills | Plugins e MCPs |
+|---|---|---|
+| `claude` (padrão) | `${CLAUDE_CONFIG_DIR:-~/.claude}/skills` | Configurados pelo instalador, salvo opções para pular. |
+| `codex` | `~/.agents/skills` | Nenhum cadastro automático. |
+| `ambos` | As duas pastas acima | Configurados somente no Claude. |
+
+O caminho do Codex segue a [documentação oficial de skills da OpenAI](https://learn.chatgpt.com/docs/build-skills). Para instalar em outro local, defina `CODEX_SKILLS_DIR`; essa variável é uma opção deste instalador, não uma configuração do Codex. O destino escolhido precisa ser uma pasta que o Codex consulte. Exemplo de instalação restrita a um projeto:
+
+```bash
+CODEX_SKILLS_DIR="/caminho/do/seu-projeto/.agents/skills" ./instalar.sh --destino codex
+```
+
+Para Codex, o instalador copia scripts, referências e assets e gera um `SKILL.md` de entrada com `name` igual ao nome da pasta e a descrição original. Mantém o corpo original e acrescenta instruções para resolver caminhos e adaptar referências a ferramentas do Claude. Os demais metadados do frontmatter, como `allowed-tools` do Claude, não são transferidos. Os arquivos de origem e suas informações de autoria/licença continuam no repositório.
+
+Essa adaptação permite instalar e descobrir as 24 skills no Codex; não substitui ferramentas externas nem garante que todo fluxo originalmente escrito para Claude funcione sem ajustes. Etapas que dependem de plugins, MCPs ou ferramentas ausentes precisam desses recursos no ambiente de destino. Nenhuma tarefa das skills é executada durante a instalação.
+
+No modo Claude, o instalador:
 
 1. Copia as 24 skills para `~/.claude/skills/`, ou para `$CLAUDE_CONFIG_DIR/skills/` quando essa variável estiver definida.
 2. Cadastra os marketplaces e instala `superpowers` e `codex` pelas origens oficiais.
@@ -44,7 +75,7 @@ Skills que já existem com o mesmo nome são mantidas. Para plugins e MCPs, o sc
 
 Depois, reinicie o Claude Code. Use `/mcp` dentro dele para conferir conexões e autenticar os serviços que exigirem login.
 
-### Instalar somente as skills
+### Instalar somente as skills do Claude
 
 Para começar sem configurar plugins nem MCPs:
 
@@ -58,6 +89,7 @@ Nesse modo, a cópia das skills também funciona sem o comando `claude` instalad
 
 | Opção | Efeito |
 |---|---|
+| `--destino claude\|codex\|ambos` | Escolhe o agente; padrão `claude`. Aceita também `--destino=codex`. |
 | `--sem-plugins` | Pula a instalação dos plugins. |
 | `--sem-mcp` | Pula o cadastro dos servidores MCP. |
 | `--plugins-do-app` | Instala também seis plugins do marketplace `anthropics/knowledge-work-plugins`. |
@@ -65,7 +97,7 @@ Nesse modo, a cópia das skills também funciona sem o comando `claude` instalad
 
 As opções podem ser combinadas. `--plugins-do-app` só tem efeito quando a instalação de plugins está habilitada.
 
-### Preparar o Playwright
+### Preparar o Playwright em cada destino
 
 Depois de copiar as skills, instale as dependências e o Chromium:
 
@@ -74,9 +106,16 @@ cd "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/playwright-skill"
 npm run setup
 ```
 
-Esse comando está definido no `package.json` da skill e executa `npm install` seguido da instalação do Chromium pelo Playwright. A pasta `node_modules` não vem no pacote.
+Para Codex, use a pasta correspondente:
 
-### Instalar uma skill manualmente
+```bash
+cd "${CODEX_SKILLS_DIR:-$HOME/.agents/skills}/playwright-skill"
+npm run setup
+```
+
+Se instalou nos dois agentes, prepare cada cópia que for usar. Esse comando está definido no `package.json` da skill e executa `npm install` seguido da instalação do Chromium pelo Playwright. A pasta `node_modules` não vem no pacote.
+
+### Instalar uma skill manualmente no Claude
 
 A partir da raiz deste repositório, este exemplo instala apenas `brag-slim` e mantém qualquer cópia existente:
 
@@ -132,7 +171,27 @@ Use as skills de testes de segurança somente em sistemas próprios ou com autor
 | [find-skills](skills-claude-code/find-skills/SKILL.md) | Descobrir e instalar outras skills do ecossistema. |
 | [playwright-skill](skills-claude-code/playwright-skill/SKILL.md) | Automatizar navegação, capturas de tela, testes de interface e fluxos web. |
 
-## Como usar
+## Como usar no Codex
+
+No aplicativo Codex, abra o projeto desejado e mencione a skill pelo nome no pedido. No CLI, abra o projeto com `codex` e use `$nome-da-skill` ou `/skills`. A seleção automática também pode ocorrer pela descrição. Esses mecanismos e as pastas de descoberta estão na [documentação oficial](https://learn.chatgpt.com/docs/build-skills).
+
+Exemplos de prompts (digite no Codex, não no shell):
+
+```text
+$playwright-skill abra http://localhost:3000 e confira a interface mobile.
+
+$02-vulnerability-scanner revise as dependências deste projeto.
+
+$12-log-analysis analise estes logs e priorize os erros recorrentes.
+
+$brag-slim crie um vídeo vertical de 20 segundos deste projeto.
+
+$find-skills encontre uma skill de acessibilidade web.
+```
+
+No Codex, os nomes são os identificadores de pasta do catálogo abaixo. Se uma skill não aparecer, reinicie o aplicativo ou a sessão e confira o destino da instalação. As referências a `/brag` e outros comandos do Claude nos textos originais devem ser usadas como menções `$brag` no Codex.
+
+## Como usar no Claude Code
 
 Abra o Claude Code na pasta do projeto em que deseja trabalhar:
 
@@ -167,7 +226,7 @@ As skills de vídeo também documentam estas invocações:
 
 Os exemplos em linguagem natural são úteis para as skills de segurança: seus campos `name` contêm títulos descritivos, com espaços e pontuação, em vez de identificadores simples. A descoberta e a validação podem variar conforme a versão do Claude Code. Se alguma não aparecer, confira o diagnóstico antes de presumir que o nome da pasta funciona como comando.
 
-## Plugins
+## Plugins do Claude Code
 
 | Plugin | Versão da cópia | Origem | Uso |
 |---|---|---|---|
@@ -178,9 +237,9 @@ O instalador baixa os plugins pelos marketplaces oficiais; a versão instalada p
 
 Com `./instalar.sh --plugins-do-app`, o script também tenta instalar `product-management`, `marketing`, `engineering`, `data`, `design` e `cowork-plugin-management`. Esses seis plugins não estão incluídos como cópias locais.
 
-## Servidores MCP
+## Servidores MCP do Claude Code
 
-MCPs conectam o Claude Code a serviços e ferramentas. O arquivo [mcps/mcp-servers.json](mcps/mcp-servers.json) é uma referência; o instalador faz o cadastro com `claude mcp add`.
+MCPs conectam o Claude Code a serviços e ferramentas. O modo Codex não altera `config.toml` nem importa o JSON do Claude; configure suas conexões separadamente no Codex quando alguma tarefa precisar delas. O arquivo [mcps/mcp-servers.json](mcps/mcp-servers.json) é uma referência; o instalador faz o cadastro com `claude mcp add`.
 
 | Nome | Serviço | Requisito |
 |---|---|---|
@@ -203,13 +262,15 @@ Para baixar alterações deste repositório:
 git pull --ff-only
 ```
 
-**Isso não atualiza as skills já copiadas para a configuração do Claude.** O instalador mantém as pastas existentes. Para atualizar uma skill, faça backup da pasta instalada, compare suas personalizações e substitua-a pela nova cópia. Evite mesclar arquivos indiscriminadamente, pois arquivos removidos na origem podem continuar no destino.
+**Isso não atualiza as skills já copiadas para Claude ou Codex.** O instalador mantém as pastas existentes nos dois destinos. Para atualizar uma skill, faça backup da pasta instalada, compare suas personalizações e mova o backup para fora das pastas de descoberta e rode o instalador novamente para o destino desejado. No Codex, isso reaplica a adaptação dos metadados; copiar somente o original não faz essa adaptação. Evite mesclar arquivos indiscriminadamente, pois arquivos removidos na origem podem continuar no destino.
 
 | Problema | O que verificar |
 |---|---|
 | `Permission denied` ao executar o instalador | Execute `bash instalar.sh` com as mesmas opções desejadas. |
 | `claude` não encontrado | Confira a instalação e o `PATH`; para apenas copiar skills, use `--sem-plugins --sem-mcp`. |
-| Skill não aparece ou não é usada | Confira `<configuração>/skills/<pasta>/SKILL.md`, reinicie o Claude Code e peça explicitamente a skill. Revise o frontmatter e os diagnósticos da sua versão. |
+| Skill do Codex não aparece | Confira `~/.agents/skills/<pasta>/SKILL.md` ou o destino personalizado; reinicie a sessão. Procure também cópias com o mesmo nome em outros escopos. |
+| Python 3 não encontrado no modo Codex | Instale Python 3 e confira o comando `python3` no `PATH`. |
+| Skill do Claude não aparece ou não é usada | Confira `<configuração>/skills/<pasta>/SKILL.md`, reinicie o Claude Code e peça explicitamente a skill. Revise o frontmatter e os diagnósticos da sua versão. |
 | Playwright sem navegador ou dependências | Execute `npm run setup` na pasta instalada da `playwright-skill`, usando Node.js 20+. |
 | Script de segurança pede um módulo Python ou ferramenta | Consulte os pré-requisitos do `SKILL.md` correspondente; o instalador não prepara essas dependências. |
 | MCP não conecta | Confira `/mcp`, URL, acesso à instância e autenticação. |
@@ -217,7 +278,16 @@ git pull --ff-only
 
 ## Limites do pacote
 
-- A instalação descrita aqui é para **Claude Code**. O script não instala skills em outros aplicativos.
+- O instalador oferece skills para **Claude Code e Codex**. Os plugins e MCPs incluídos na automação continuam exclusivos do modo Claude.
 - Conectores e skills exclusivos da conta claude.ai não são migrados pelo instalador. As notas e a relação original estão em [LEIA-ME.md](LEIA-ME.md).
 - Logins e tokens precisam ser configurados na conta de destino.
 - Cada componente mantém suas próprias informações de autoria e licença; consulte os arquivos correspondentes antes de redistribuir.
+
+## Verificar o instalador
+
+Os testes usam pastas temporárias e comandos simulados, sem modificar a instalação pessoal nem conectar serviços:
+
+```bash
+bash -n instalar.sh
+python3 -m unittest discover -s tests -v
+```
